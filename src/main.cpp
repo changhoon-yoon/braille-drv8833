@@ -61,12 +61,24 @@ void coilOff() {
 }
 
 // u: 팝(100%) 후 홀드 듀티로 유지 — 단방향(ON=밀기) 방식
+// 홀드는 "슬로 디케이" PWM: AIN1=HIGH 고정, AIN2를 PWM.
+// (AIN2가 LOW인 동안 구동, HIGH인 동안 브레이크 — 코일 전류가 안 끊기고
+//  순환해서 평균 전류가 듀티에 비례함. AIN1만 PWM하면(fast decay)
+//  전류가 매 주기 무너져 평균이 수십 mA로 붕괴함)
 void raiseAndHold() {
   coilWrite(CH_PUSH, CH_PULL, 255);
   delay(pulseMs);
-  ledcWrite(CH_PUSH, holdDuty);
+  ledcWrite(CH_PUSH, 255);
+  ledcWrite(CH_PULL, 255 - holdDuty);
   holding = true;
-  Serial.printf("[RAISE] pop %dms -> hold %d/255\n", pulseMs, holdDuty);
+  Serial.printf("[RAISE] pop %dms -> hold %d/255 (slow decay)\n", pulseMs, holdDuty);
+}
+
+// o: 100% 연속 ON — 전류계로 풀로드(~1.1A) 확인용. 발열 주의!
+void fullOn() {
+  coilWrite(CH_PUSH, CH_PULL, 255);
+  holding = true;
+  Serial.println("[FULL ON] 100% 연속 - 약 1.1A. 10초 안에 d로 끌 것(발열)");
 }
 
 // d: 전원 차단 — 자석이 못 코어로 스스로 복귀
@@ -104,6 +116,7 @@ void printStatus() {
 void printHelp() {
   Serial.println("---- braille coil bench ----");
   Serial.println(" u : 올리기 (팝->홀드)");
+  Serial.println(" o : 100% 연속 ON (전류계 확인용, 발열주의)");
   Serial.println(" d : 내리기 (OFF)");
   Serial.println(" p : 밀기 펄스만");
   Serial.println(" q : 당기기 펄스");
@@ -142,6 +155,7 @@ void loop() {
 
   switch (c) {
     case 'u': raiseAndHold(); break;
+    case 'o': fullOn();       break;
     case 'd': release();      break;
     case 'p': pushPulse();    break;
     case 'q': pullPulse();    break;
@@ -161,10 +175,10 @@ void loop() {
     case '+': pulseMs += 10; printStatus(); break;
     case '-': pulseMs = max(10, pulseMs - 10); printStatus(); break;
     case ']': holdDuty = min(255, holdDuty + 10);
-              if (holding) ledcWrite(CH_PUSH, holdDuty);
+              if (holding) ledcWrite(CH_PULL, 255 - holdDuty);
               printStatus(); break;
     case '[': holdDuty = max(0, holdDuty - 10);
-              if (holding) ledcWrite(CH_PUSH, holdDuty);
+              if (holding) ledcWrite(CH_PULL, 255 - holdDuty);
               printStatus(); break;
     case 's': printStatus(); break;
     case '?': printHelp();   break;
