@@ -42,6 +42,13 @@ int  pulseMs  = 40;   // 팝/펄스 폭. 실험으로 최소값 찾기 (40 -> 30
 int  holdDuty = 70;   // 홀드 듀티. 70/255 = 약 27%. 핀이 안 떨어지는 최소값 찾기
 bool holding  = false;
 
+// ---------- 자동 반복 테스트 (t 키) ----------
+// 밀기 펄스 -> OFF -> intervalMs 대기 -> 당기기 펄스 -> OFF -> 대기 -> 반복
+bool          autoTest     = false;
+bool          nextIsPush   = true;
+int           intervalMs   = 1000;
+unsigned long lastFireAt   = 0;
+
 // 반대쪽을 먼저 끄고 나서 켠다 → 둘 다 HIGH(브레이크) 원천 차단
 void coilWrite(int chOn, int chOff, int duty) {
   ledcWrite(chOff, 0);
@@ -88,8 +95,9 @@ void pullPulse() {
 }
 
 void printStatus() {
-  Serial.printf("[STATUS] pulse=%dms hold=%d/255 (%.0f%%) state=%s\n",
-                pulseMs, holdDuty, holdDuty * 100.0 / 255,
+  Serial.printf("[STATUS] pulse=%dms hold=%d/255 (%.0f%%) interval=%dms auto=%s state=%s\n",
+                pulseMs, holdDuty, holdDuty * 100.0 / 255, intervalMs,
+                autoTest ? "ON" : "OFF",
                 holding ? "HOLDING" : "OFF");
 }
 
@@ -99,6 +107,8 @@ void printHelp() {
   Serial.println(" d : 내리기 (OFF)");
   Serial.println(" p : 밀기 펄스만");
   Serial.println(" q : 당기기 펄스");
+  Serial.println(" t : 자동 반복 (밀기->1초->당기기->1초...)");
+  Serial.println(" < / > : 반복 간격 -+250ms");
   Serial.println(" +/- : 펄스폭 +-10ms");
   Serial.println(" [/] : 홀드듀티 -+10");
   Serial.println(" s : 상태  ? : 도움말");
@@ -119,6 +129,14 @@ void setup() {
 }
 
 void loop() {
+  // ---- 자동 반복 테스트 (논블로킹: 대기 중에도 키 입력 받음) ----
+  if (autoTest && millis() - lastFireAt >= (unsigned long)intervalMs) {
+    if (nextIsPush) pushPulse();
+    else            pullPulse();
+    nextIsPush = !nextIsPush;
+    lastFireAt = millis();
+  }
+
   if (!Serial.available()) return;
   char c = Serial.read();
 
@@ -127,6 +145,19 @@ void loop() {
     case 'd': release();      break;
     case 'p': pushPulse();    break;
     case 'q': pullPulse();    break;
+    case 't':
+      autoTest = !autoTest;
+      if (autoTest) {
+        nextIsPush = true;
+        lastFireAt = millis() - intervalMs;  // 켜자마자 첫 발사
+        Serial.printf("[AUTO] 시작 - 펄스 %dms, 간격 %dms (t로 정지)\n", pulseMs, intervalMs);
+      } else {
+        coilOff(); holding = false;
+        Serial.println("[AUTO] 정지 - 코일 OFF");
+      }
+      break;
+    case '>': intervalMs += 250; printStatus(); break;
+    case '<': intervalMs = max(250, intervalMs - 250); printStatus(); break;
     case '+': pulseMs += 10; printStatus(); break;
     case '-': pulseMs = max(10, pulseMs - 10); printStatus(); break;
     case ']': holdDuty = min(255, holdDuty + 10);
