@@ -49,6 +49,13 @@ bool          nextIsPush   = true;
 int           intervalMs   = 1000;
 unsigned long lastFireAt   = 0;
 
+// ---------- 연속 방향반전 모드 (r 키) ----------
+// 코일을 계속 켜둔 채 intervalMs마다 극성만 반전 (자석이 왕복)
+// 연속 통전이라 발열 → 30초 지나면 자동 정지
+bool          altMode      = false;
+unsigned long altStartAt   = 0;
+const unsigned long ALT_MAX_MS = 30000;
+
 // 반대쪽을 먼저 끄고 나서 켠다 → 둘 다 HIGH(브레이크) 원천 차단
 void coilWrite(int chOn, int chOff, int duty) {
   ledcWrite(chOff, 0);
@@ -81,10 +88,12 @@ void fullOn() {
   Serial.println("[FULL ON] 100% 연속 - 약 1.1A. 10초 안에 d로 끌 것(발열)");
 }
 
-// d: 전원 차단 — 자석이 못 코어로 스스로 복귀
+// d: 전원 차단 — 자석이 못 코어로 스스로 복귀 (모든 자동 모드도 정지)
 void release() {
   coilOff();
   holding = false;
+  autoTest = false;
+  altMode = false;
   Serial.println("[RELEASE] OFF - 자석 복귀");
 }
 
@@ -120,7 +129,8 @@ void printHelp() {
   Serial.println(" d : 내리기 (OFF)");
   Serial.println(" p : 밀기 펄스만");
   Serial.println(" q : 당기기 펄스");
-  Serial.println(" t : 자동 반복 (밀기->1초->당기기->1초...)");
+  Serial.println(" t : 자동 반복 펄스 (밀기->1초->당기기->1초...)");
+  Serial.println(" r : 연속 방향반전 (계속 ON, 1초마다 극성 전환, 30초 자동정지)");
   Serial.println(" < / > : 반복 간격 -+250ms");
   Serial.println(" +/- : 펄스폭 +-10ms");
   Serial.println(" [/] : 홀드듀티 -+10");
@@ -150,6 +160,21 @@ void loop() {
     lastFireAt = millis();
   }
 
+  // ---- 연속 방향반전 모드 ----
+  if (altMode) {
+    if (millis() - altStartAt >= ALT_MAX_MS) {
+      altMode = false;
+      coilOff();
+      Serial.println("[ALT] 30초 자동 정지 (발열 보호) - r로 재시작");
+    } else if (millis() - lastFireAt >= (unsigned long)intervalMs) {
+      nextIsPush = !nextIsPush;
+      if (nextIsPush) coilWrite(CH_PUSH, CH_PULL, 255);
+      else            coilWrite(CH_PULL, CH_PUSH, 255);
+      Serial.println(nextIsPush ? "[ALT] -> PUSH" : "[ALT] -> PULL");
+      lastFireAt = millis();
+    }
+  }
+
   if (!Serial.available()) return;
   char c = Serial.read();
 
@@ -159,9 +184,24 @@ void loop() {
     case 'd': release();      break;
     case 'p': pushPulse();    break;
     case 'q': pullPulse();    break;
+    case 'r':
+      altMode = !altMode;
+      if (altMode) {
+        autoTest = false;
+        nextIsPush = true;
+        coilWrite(CH_PUSH, CH_PULL, 255);
+        altStartAt = lastFireAt = millis();
+        Serial.printf("[ALT] 시작 - %dms마다 극성 반전, 30초 자동정지 (r로 정지)\n", intervalMs);
+        Serial.println("[ALT] -> PUSH");
+      } else {
+        coilOff(); holding = false;
+        Serial.println("[ALT] 정지 - 코일 OFF");
+      }
+      break;
     case 't':
       autoTest = !autoTest;
       if (autoTest) {
+        altMode = false;
         nextIsPush = true;
         lastFireAt = millis() - intervalMs;  // 켜자마자 첫 발사
         Serial.printf("[AUTO] 시작 - 펄스 %dms, 간격 %dms (t로 정지)\n", pulseMs, intervalMs);
