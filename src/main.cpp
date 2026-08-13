@@ -193,6 +193,13 @@ void setup() {
   delay(500);
   printHelp();
   printStatus();
+
+  // 벤치: 지금은 코일0(GPIO4/5)만 연결됨 — 부팅하면 바로 래치 테스트 자동 시작.
+  // (PUSH 후 전기 0 대기 → PULL 교대. t로 정지, d로 전체 OFF)
+  autoTest = true;
+  nextIsPush = true;
+  lastFireAt = millis() - intervalMs;  // 켜자마자 첫 발사
+  Serial.printf("[AUTO] 부팅 자동시작: coil %d - 펄스 %dms, 간격 %dms (t로 정지)\n", sel, pulseMs, intervalMs);
 }
 
 void loop() {
