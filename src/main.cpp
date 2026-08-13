@@ -23,7 +23,8 @@
 //
 // [벤치 튜닝 명령 - 사람이 시리얼 모니터에서]
 //   0~8 : 튜닝 대상 코일 선택
-//   u : 선택 코일 올리기 (팝 -> 홀드)     d : 전부 내리기 + 모든 모드 정지
+//   u : 선택 코일 올리기                  d : 전부 내리기 + 모든 모드 정지
+//   h : 래치/홀드 모드 전환 (기본: 래치 — 펄스 후 전원 0으로 매달림 유지)
 //   p : 밀기 펄스만    q : 당기기 펄스    o : 100% 연속 ON (전류계용, 발열!)
 //   t : 자동 반복 펄스  r : 켜고-끄고 교대 (60초 자동정지)
 //   + / - : 펄스폭 ±10ms    [ / ] : 홀드 듀티 ∓10    < / > : 반복간격 ∓250ms
@@ -54,6 +55,7 @@ const int PWM_RES  = 8;     // 듀티 0~255
 int  pulseMs  = 20;   // 팝 펄스 폭 (래치 최소 통전 탐색 — 길면 반동으로 되튈 수 있어 짧게, +/-로 조정)
 int  holdDuty = 70;   // 홀드 실효 듀티 70/255 ≈ 27%
 int  popGapMs = 60;   // 순차 팝 사이 간격 (동시 발사 금지 — 전원 딥 방지)
+bool latchMode = true; // true: 펄스 래치(유지전류 0, 20ms 검증됨) / false: 팝→홀드 PWM
 
 bool up[NUM_COILS] = {false};  // 각 코일 올라감 상태
 int  sel = 0;                  // 벤치 명령 대상 코일
@@ -91,29 +93,45 @@ void in2Hold(int i) {
   ledcAttachPin(COILS[i][1], CH_HOLD);
 }
 
-// 팝(100% pulseMs) 후 홀드로 전환
-void coilRaise(int i) {
+// 원시 전원 차단 — 래치 모드에선 핀이 매달린 채 남을 수 있음 (동기화는 d)
+void coilOff(int i) {
+  digitalWrite(COILS[i][0], LOW);
+  in2Gpio(i, LOW);
+  if (!latchMode) up[i] = false;  // 홀드 모드에선 전원 차단 = 낙하
+}
+
+// 밀기 펄스 후 전원 0 — 자석이 임계점을 넘으면 무전원으로 매달림 (래치)
+void coilPushPulse(int i) {
   digitalWrite(COILS[i][0], HIGH);
   in2Gpio(i, LOW);            // 풀 구동
   delay(pulseMs);
-  in2Hold(i);                 // 홀드 PWM으로 전환
-  up[i] = true;
-}
-
-// 전원 차단 — 자석이 못 코어로 스스로 복귀
-void coilRelease(int i) {
   digitalWrite(COILS[i][0], LOW);
-  in2Gpio(i, LOW);
-  up[i] = false;
+  up[i] = latchMode;          // 래치 모드에서만 '올라감'으로 기록
 }
 
-// 당기기 펄스 (반대 극성 — 래칭 실험용)
+// 당기기 펄스 (반대 극성) — 래치된 자석을 끌어내려 복귀
 void coilPullPulse(int i) {
   digitalWrite(COILS[i][0], LOW);
   in2Gpio(i, HIGH);
   delay(pulseMs);
   in2Gpio(i, LOW);
   up[i] = false;
+}
+
+// 올리기 — 래치: 펄스만 / 홀드: 팝 후 홀드 PWM 전환
+void coilRaise(int i) {
+  if (latchMode) { coilPushPulse(i); return; }
+  digitalWrite(COILS[i][0], HIGH);
+  in2Gpio(i, LOW);
+  delay(pulseMs);
+  in2Hold(i);
+  up[i] = true;
+}
+
+// 내리기 — 래치: 당김 펄스로 강제 복귀 / 홀드: 전원 차단으로 자연 복귀
+void coilRelease(int i) {
+  if (latchMode) { coilPullPulse(i); return; }
+  coilOff(i);
 }
 
 void allOff() {
@@ -145,11 +163,15 @@ void applyPattern(const char* p) {
       first = false;
     }
   }
-  // 홀드 전류 어림: 풀온 ~1.1A 기준 × 실효 듀티 × 개수 (전원 여유 확인용)
-  float amp = countUp() * 1.1f * holdDuty / 255.0f;
-  Serial.printf("[OK] %s up=%d (~%.1fA hold)\n", patternStr().c_str(), countUp(), amp);
-  if (amp > 1.0f)
-    Serial.println("[WARN] 홀드 전류가 1A 초과 추정 - 벤치 서플라이 한도(1.2A) 확인!");
+  if (latchMode) {
+    Serial.printf("[OK] %s up=%d (latch, 유지전류 0)\n", patternStr().c_str(), countUp());
+  } else {
+    // 홀드 전류 어림: 풀온 ~1.1A 기준 × 실효 듀티 × 개수 (전원 여유 확인용)
+    float amp = countUp() * 1.1f * holdDuty / 255.0f;
+    Serial.printf("[OK] %s up=%d (~%.1fA hold)\n", patternStr().c_str(), countUp(), amp);
+    if (amp > 1.0f)
+      Serial.println("[WARN] 홀드 전류가 1A 초과 추정 - 벤치 서플라이 한도(1.2A) 확인!");
+  }
 }
 
 void parseLine() {
@@ -162,7 +184,8 @@ void parseLine() {
 }
 
 void printStatus() {
-  Serial.printf("[STATUS] pat=%s sel=%d pulse=%dms hold=%d/255 (%.0f%%) gap=%dms interval=%dms auto=%s alt=%s\n",
+  Serial.printf("[STATUS] mode=%s pat=%s sel=%d pulse=%dms hold=%d/255 (%.0f%%) gap=%dms interval=%dms auto=%s alt=%s\n",
+                latchMode ? "LATCH" : "HOLD",
                 patternStr().c_str(), sel, pulseMs, holdDuty, holdDuty * 100.0 / 255,
                 popGapMs, intervalMs, autoTest ? "ON" : "OFF", altMode ? "ON" : "OFF");
 }
@@ -171,7 +194,8 @@ void printHelp() {
   Serial.println("---- braille 9-coil ----");
   Serial.println(" B:XXXXXXXXX(엔터) : 9자리 패턴 적용 (Pi용, 행 우선)");
   Serial.println(" 0~8 : 튜닝 대상 코일 선택");
-  Serial.println(" u : 선택 코일 올리기 (팝->홀드)   d : 전부 내리기+모드 정지");
+  Serial.println(" u : 선택 코일 올리기   d : 전부 내리기(당김 스윕)+모드 정지");
+  Serial.println(" h : 래치/홀드 모드 전환 (기본 래치 - 펄스 후 전원 0)");
   Serial.println(" p : 밀기 펄스만   q : 당기기 펄스   o : 100% 연속 ON (발열주의)");
   Serial.println(" t : 자동 반복 펄스   r : 켜고-끄고 교대 (60초 자동정지)");
   Serial.println(" +/- : 펄스폭   [/] : 홀드듀티   </> : 반복간격");
@@ -189,6 +213,9 @@ void setup() {
   ledcSetup(CH_HOLD, PWM_FREQ, PWM_RES);
   ledcWrite(CH_HOLD, 255 - holdDuty);
 
+  // 리부트 전 래치로 매달려 있던 핀을 전부 당겨 내림 — 물리 상태 동기화
+  for (int i = 0; i < NUM_COILS; i++) coilPullPulse(i);
+
   Serial.begin(115200);
   delay(500);
   printHelp();
@@ -205,7 +232,7 @@ void setup() {
 void loop() {
   // ---- 자동 반복 테스트 (선택 코일, 논블로킹) ----
   if (autoTest && millis() - lastFireAt >= (unsigned long)intervalMs) {
-    if (nextIsPush) { digitalWrite(COILS[sel][0], HIGH); in2Gpio(sel, LOW); delay(pulseMs); coilRelease(sel); Serial.printf("[PUSH] %dms\n", pulseMs); }
+    if (nextIsPush) { coilPushPulse(sel); Serial.printf("[PUSH] %dms\n", pulseMs); }
     else            { coilPullPulse(sel); Serial.printf("[PULL] %dms\n", pulseMs); }
     nextIsPush = !nextIsPush;
     lastFireAt = millis();
@@ -215,11 +242,11 @@ void loop() {
   if (altMode) {
     if (millis() - altStartAt >= ALT_MAX_MS) {
       altMode = false;
-      coilRelease(sel);
+      coilOff(sel);
       Serial.println("[ALT] 60초 자동 정지 (발열 보호) - r로 재시작");
     } else if (millis() - lastFireAt >= (unsigned long)intervalMs) {
       if (altOn) {
-        coilRelease(sel);
+        coilOff(sel);
         altOn = false;
         Serial.println("[ALT] OFF");
       } else {
@@ -266,7 +293,8 @@ void loop() {
 
   switch (c) {
     case 'u': coilRaise(sel);
-              Serial.printf("[RAISE] coil %d pop %dms -> hold %d/255\n", sel, pulseMs, holdDuty);
+              if (latchMode) Serial.printf("[RAISE] coil %d 래치 펄스 %dms (유지전류 0)\n", sel, pulseMs);
+              else           Serial.printf("[RAISE] coil %d pop %dms -> hold %d/255\n", sel, pulseMs, holdDuty);
               break;
     case 'o': digitalWrite(COILS[sel][0], HIGH); in2Gpio(sel, LOW); up[sel] = true;
               Serial.println("[FULL ON] 100% 연속 - 약 1.1A. 10초 안에 d로 끌 것(발열)");
@@ -275,7 +303,7 @@ void loop() {
               autoTest = false; altMode = false;
               Serial.println("[RELEASE] 전부 OFF - 자석 복귀");
               break;
-    case 'p': digitalWrite(COILS[sel][0], HIGH); in2Gpio(sel, LOW); delay(pulseMs); coilRelease(sel);
+    case 'p': coilPushPulse(sel);
               Serial.printf("[PUSH] coil %d %dms\n", sel, pulseMs);
               break;
     case 'q': coilPullPulse(sel);
@@ -292,7 +320,7 @@ void loop() {
         Serial.printf("[ALT] coil %d - %dms ON / OFF 교대, 60초 자동정지 (r로 정지)\n", sel, intervalMs);
         Serial.println("[ALT] ON (PUSH)");
       } else {
-        coilRelease(sel);
+        coilOff(sel);
         Serial.println("[ALT] 정지 - 코일 OFF");
       }
       break;
@@ -304,7 +332,7 @@ void loop() {
         lastFireAt = millis() - intervalMs;  // 켜자마자 첫 발사
         Serial.printf("[AUTO] coil %d - 펄스 %dms, 간격 %dms (t로 정지)\n", sel, pulseMs, intervalMs);
       } else {
-        coilRelease(sel);
+        coilOff(sel);
         Serial.println("[AUTO] 정지 - 코일 OFF");
       }
       break;
@@ -318,6 +346,9 @@ void loop() {
     case '[': holdDuty = max(0, holdDuty - 10);
               ledcWrite(CH_HOLD, 255 - holdDuty);
               printStatus(); break;
+    case 'h': latchMode = !latchMode;
+              Serial.printf("[MODE] %s\n", latchMode ? "LATCH - 펄스 후 전원 0 유지" : "HOLD - 팝 후 PWM 유지");
+              break;
     case 's': printStatus(); break;
     case '?': printHelp();   break;
     default: break;  // 엔터/공백 등은 무시
