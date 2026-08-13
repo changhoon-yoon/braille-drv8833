@@ -51,7 +51,7 @@ const int PWM_FREQ = 20000; // 20kHz: 사람 귀에 안 들림
 const int PWM_RES  = 8;     // 듀티 0~255
 
 // ---------- 튜닝 변수 (시리얼로 실시간 조정) ----------
-int  pulseMs  = 40;   // 팝 펄스 폭
+int  pulseMs  = 60;   // 팝 펄스 폭 (래치가 확실히 걸리도록 40→60ms로 연장)
 int  holdDuty = 70;   // 홀드 실효 듀티 70/255 ≈ 27%
 int  popGapMs = 60;   // 순차 팝 사이 간격 (동시 발사 금지 — 전원 딥 방지)
 
