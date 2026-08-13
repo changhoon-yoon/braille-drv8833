@@ -51,7 +51,7 @@ const int PWM_FREQ = 20000; // 20kHz: 사람 귀에 안 들림
 const int PWM_RES  = 8;     // 듀티 0~255
 
 // ---------- 튜닝 변수 (시리얼로 실시간 조정) ----------
-int  pulseMs  = 60;   // 팝 펄스 폭 (래치가 확실히 걸리도록 40→60ms로 연장)
+int  pulseMs  = 30;   // 팝 펄스 폭 (래치에 필요한 최소 통전 탐색 — 짧게 시작, +/-로 조정)
 int  holdDuty = 70;   // 홀드 실효 듀티 70/255 ≈ 27%
 int  popGapMs = 60;   // 순차 팝 사이 간격 (동시 발사 금지 — 전원 딥 방지)
 
@@ -61,7 +61,7 @@ int  sel = 0;                  // 벤치 명령 대상 코일
 // ---------- 자동 반복 테스트 (t 키) ----------
 bool          autoTest     = false;
 bool          nextIsPush   = true;
-int           intervalMs   = 1000;
+int           intervalMs   = 3000;  // 펄스 후 전기 0 대기 — 무전원 래치 유지 확인용으로 길게
 unsigned long lastFireAt   = 0;
 
 // ---------- 켜고-끄고 교대 모드 (r 키) ----------
