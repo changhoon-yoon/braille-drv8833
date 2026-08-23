@@ -15,20 +15,28 @@ ESP32-S3 + DRV8833 + 자작 코일(못 코어 + 네오디뮴 자석)로 점자 �
 ## 🙌 코딩 몰라도 됩니다 — 바이브 코딩으로 시작하기
 
 이 저장소는 팀원이 코딩/ESP32를 몰라도 AI에게 시켜서 조작할 수 있게 만들어졌다.
-직접 명령어를 칠 필요 없이 [Gemini CLI](https://github.com/google-gemini/gemini-cli)에게
-한국어로 부탁하면 된다 (구글 계정만 있으면 무료).
+직접 명령어를 칠 필요 없이 AI 코딩 도구에게 한국어로 부탁하면 되고,
+**Gemini CLI / Claude Code / Codex 어느 것이든 호환**된다. 하나만 골라 설치하면 된다.
 
-1. **Node.js 설치** — https://nodejs.org 에서 LTS 버전 다운로드 → 계속 "다음"으로 설치
-2. **Gemini CLI 설치** — PowerShell을 열고 아래 한 줄을 붙여넣기:
-   ```powershell
-   npm install -g @google/gemini-cli
-   ```
-3. **실행** — PowerShell에서 `gemini` 입력 → 브라우저에서 구글 계정 로그인
-4. **첫 요청** — 아래 문장을 그대로 붙여넣기:
-   > https://github.com/changhoon-yoon/braille-drv8833 클론해서 README대로 개발 환경을 세팅해줘.
-   > 드라이버나 프로그램 설치가 필요하면 알려주면서 진행해줘.
-5. **보드 연결 후** — USB로 보드를 꽂고 이렇게 시키면 끝:
-   > 보드에 펌웨어 업로드하고, 전 코일 스윕 테스트(a) 돌려서 결과 알려줘
+### 1) AI 도구 하나 설치
+
+| 도구 | 설치 (PowerShell에 붙여넣기) | 실행 | 계정 |
+|---|---|---|---|
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `npm install -g @google/gemini-cli` | `gemini` | 구글 계정 (**무료**) |
+| [Claude Code](https://claude.com/claude-code) | `irm https://claude.ai/install.ps1 \| iex` | `claude` | Claude 유료 구독 |
+| [Codex](https://github.com/openai/codex) | `npm install -g @openai/codex` | `codex` | ChatGPT 유료 구독 |
+
+- Gemini CLI/Codex는 [Node.js LTS](https://nodejs.org)를 먼저 설치해야 한다 (계속 "다음"으로 설치)
+- 뭘 쓸지 모르겠으면 **무료인 Gemini CLI** 추천
+
+### 2) 실행 후 아래 문장을 그대로 붙여넣기
+
+> https://github.com/changhoon-yoon/braille-drv8833 클론해서 README대로 개발 환경을 세팅해줘.
+> 드라이버나 프로그램 설치가 필요하면 알려주면서 진행해줘.
+
+### 3) 보드 연결 후 — USB로 보드를 꽂고 이렇게 시키면 끝
+
+> 보드에 펌웨어 업로드하고, 전 코일 스윕 테스트(a) 돌려서 결과 알려줘
 
 이후에도 전부 말로 하면 된다. 예시:
 - "점자 패턴 `B:101000000` 보내줘"
