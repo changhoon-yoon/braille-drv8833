@@ -152,17 +152,22 @@ String patternStr() {
 }
 
 // ---- B:XXXXXXXXX 패턴 적용 ----
-// 내릴 것 먼저 전부 내리고(즉시), 올릴 것은 순차 팝 (동시 발사 금지)
+// '0' 자리는 반대 극성(당김) 펄스를 무조건 발사, '1' 자리도 무조건 재푸시.
+// up[] 추적에 의존하지 않아 크로스토크·탈조로 어긋난 핀도 매번 물리적으로
+// 패턴과 일치하게 정렬된다. 전부 순차 발사 (동시 통전 금지 — 전원 딥 방지)
 void applyPattern(const char* p) {
-  for (int i = 0; i < NUM_COILS; i++)
-    if (p[i] == '0' && up[i]) coilRelease(i);
   bool first = true;
   for (int i = 0; i < NUM_COILS; i++) {
-    if (p[i] == '1' && !up[i]) {
-      if (!first) delay(popGapMs);
-      coilRaise(i);
-      first = false;
-    }
+    if (p[i] == '1') continue;
+    if (!first) delay(popGapMs);
+    coilRelease(i);
+    first = false;
+  }
+  for (int i = 0; i < NUM_COILS; i++) {
+    if (p[i] == '0') continue;
+    if (!first) delay(popGapMs);
+    coilRaise(i);
+    first = false;
   }
   if (latchMode) {
     Serial.printf("[OK] %s up=%d (latch, 유지전류 0)\n", patternStr().c_str(), countUp());
