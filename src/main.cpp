@@ -27,6 +27,7 @@
 //   h : 래치/홀드 모드 전환 (기본: 래치 — 펄스 후 전원 0으로 매달림 유지)
 //   p : 밀기 펄스만    q : 당기기 펄스    o : 100% 연속 ON (전류계용, 발열!)
 //   t : 자동 반복 펄스  r : 켜고-끄고 교대 (60초 자동정지)
+//   a : 전 코일 스윕 (0→8 순차 PUSH → 대기 → 0→8 순차 PULL)
 //   + / - : 펄스폭 ±10ms    [ / ] : 홀드 듀티 ∓10    < / > : 반복간격 ∓250ms
 //   s : 상태  ? : 도움말
 // ============================================================
@@ -198,6 +199,7 @@ void printHelp() {
   Serial.println(" h : 래치/홀드 모드 전환 (기본 래치 - 펄스 후 전원 0)");
   Serial.println(" p : 밀기 펄스만   q : 당기기 펄스   o : 100% 연속 ON (발열주의)");
   Serial.println(" t : 자동 반복 펄스   r : 켜고-끄고 교대 (60초 자동정지)");
+  Serial.println(" a : 전 코일 스윕 (0→8 PUSH → 대기 → 전부 PULL)");
   Serial.println(" +/- : 펄스폭   [/] : 홀드듀티   </> : 반복간격");
   Serial.println(" s : 상태   ? : 도움말");
 }
@@ -346,6 +348,26 @@ void loop() {
     case '[': holdDuty = max(0, holdDuty - 10);
               ledcWrite(CH_HOLD, 255 - holdDuty);
               printStatus(); break;
+    case 'a': {  // 전 코일 스윕: 순차 PUSH → 무전원 래치 관찰 → 순차 PULL
+      autoTest = false; altMode = false;
+      Serial.printf("[SWEEP] 0→8 순차 PUSH (펄스 %dms, 간격 %dms)\n", pulseMs, popGapMs);
+      for (int i = 0; i < NUM_COILS; i++) {
+        coilPushPulse(i);
+        Serial.printf("[SWEEP] coil %d PUSH\n", i);
+        if (i < NUM_COILS - 1) delay(popGapMs);
+      }
+      printStatus();
+      Serial.printf("[SWEEP] %dms 무전원 래치 관찰 후 전부 내림...\n", intervalMs);
+      delay(intervalMs);
+      for (int i = 0; i < NUM_COILS; i++) {
+        coilPullPulse(i);
+        Serial.printf("[SWEEP] coil %d PULL\n", i);
+        if (i < NUM_COILS - 1) delay(popGapMs);
+      }
+      printStatus();
+      Serial.println("[SWEEP] 완료 - 안 올라간/안 내려간 셀 번호를 기록할 것");
+      break;
+    }
     case 'h': latchMode = !latchMode;
               Serial.printf("[MODE] %s\n", latchMode ? "LATCH - 펄스 후 전원 0 유지" : "HOLD - 팝 후 PWM 유지");
               break;
