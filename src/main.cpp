@@ -49,11 +49,13 @@ const int COILS[NUM_COILS][2] = {
 // 홀드 듀티는 전 코일이 같으므로, 홀드 중인 코일의 IN2만 이 채널에
 // attach하고 팝/내리기는 digitalWrite로 처리한다.
 const int CH_HOLD  = 0;
+const int CH_PULSE = 1;     // 펄스 구동 세기용 (pulsePower%, 발사 순간에만 attach)
 const int PWM_FREQ = 20000; // 20kHz: 사람 귀에 안 들림
 const int PWM_RES  = 8;     // 듀티 0~255
 
 // ---------- 튜닝 변수 (시리얼로 실시간 조정) ----------
 int  pulseMs  = 20;   // 팝 펄스 폭 (래치 최소 통전 탐색 — 길면 반동으로 되튈 수 있어 짧게, +/-로 조정)
+int  pulsePower = 70; // 펄스 구동 세기 % (100=풀토크, (/)로 ∓5 조정 — 래치 실패하면 올릴 것)
 int  holdDuty = 70;   // 홀드 실효 듀티 70/255 ≈ 27%
 int  popGapMs = 60;   // 순차 팝 사이 간격 (동시 발사 금지 — 전원 딥 방지)
 bool latchMode = true; // true: 펄스 래치(유지전류 0, 20ms 검증됨) / false: 팝→홀드 PWM
@@ -101,21 +103,36 @@ void coilOff(int i) {
   if (!latchMode) up[i] = false;  // 홀드 모드에선 전원 차단 = 낙하
 }
 
+// IN 핀 하나에 pulsePower% PWM을 pulseMs 동안 인가 후 LOW 복귀.
+// 반대편 IN이 LOW라 PWM 오프 구간은 코스트(fast decay) — 실효 세기 ≈ 듀티%
+void drivePwmPulse(int gpio) {
+  if (pulsePower >= 100) {          // 100%는 PWM 없이 풀 구동
+    digitalWrite(gpio, HIGH);
+    delay(pulseMs);
+    digitalWrite(gpio, LOW);
+    return;
+  }
+  ledcWrite(CH_PULSE, pulsePower * 255 / 100);
+  ledcAttachPin(gpio, CH_PULSE);
+  delay(pulseMs);
+  ledcDetachPin(gpio);
+  pinMode(gpio, OUTPUT);
+  digitalWrite(gpio, LOW);
+}
+
 // 밀기 펄스 후 전원 0 — 자석이 임계점을 넘으면 무전원으로 매달림 (래치)
 void coilPushPulse(int i) {
-  digitalWrite(COILS[i][0], HIGH);
-  in2Gpio(i, LOW);            // 풀 구동
-  delay(pulseMs);
-  digitalWrite(COILS[i][0], LOW);
+  in2Gpio(i, LOW);
+  drivePwmPulse(COILS[i][0]);
   up[i] = latchMode;          // 래치 모드에서만 '올라감'으로 기록
 }
 
 // 당기기 펄스 (반대 극성) — 래치된 자석을 끌어내려 복귀
 void coilPullPulse(int i) {
   digitalWrite(COILS[i][0], LOW);
-  in2Gpio(i, HIGH);
-  delay(pulseMs);
-  in2Gpio(i, LOW);
+  ledcDetachPin(COILS[i][1]);       // 홀드 채널에 붙어 있었을 수 있음
+  pinMode(COILS[i][1], OUTPUT);
+  drivePwmPulse(COILS[i][1]);
   up[i] = false;
 }
 
@@ -190,9 +207,9 @@ void parseLine() {
 }
 
 void printStatus() {
-  Serial.printf("[STATUS] mode=%s pat=%s sel=%d pulse=%dms hold=%d/255 (%.0f%%) gap=%dms interval=%dms auto=%s alt=%s\n",
+  Serial.printf("[STATUS] mode=%s pat=%s sel=%d pulse=%dms pwr=%d%% hold=%d/255 (%.0f%%) gap=%dms interval=%dms auto=%s alt=%s\n",
                 latchMode ? "LATCH" : "HOLD",
-                patternStr().c_str(), sel, pulseMs, holdDuty, holdDuty * 100.0 / 255,
+                patternStr().c_str(), sel, pulseMs, pulsePower, holdDuty, holdDuty * 100.0 / 255,
                 popGapMs, intervalMs, autoTest ? "ON" : "OFF", altMode ? "ON" : "OFF");
 }
 
@@ -205,7 +222,7 @@ void printHelp() {
   Serial.println(" p : 밀기 펄스만   q : 당기기 펄스   o : 100% 연속 ON (발열주의)");
   Serial.println(" t : 자동 반복 펄스   r : 켜고-끄고 교대 (60초 자동정지)");
   Serial.println(" a : 전 코일 스윕 (0→8 PUSH → 대기 → 전부 PULL)");
-  Serial.println(" +/- : 펄스폭   [/] : 홀드듀티   </> : 반복간격");
+  Serial.println(" +/- : 펄스폭   (/) : 펄스파워 ∓5%   [/] : 홀드듀티   </> : 반복간격");
   Serial.println(" s : 상태   ? : 도움말");
 }
 
@@ -219,6 +236,8 @@ void setup() {
   // Arduino core 2.x LEDC API. 채널 하나만 쓰고 전 코일이 공유한다.
   ledcSetup(CH_HOLD, PWM_FREQ, PWM_RES);
   ledcWrite(CH_HOLD, 255 - holdDuty);
+  ledcSetup(CH_PULSE, PWM_FREQ, PWM_RES);
+  ledcWrite(CH_PULSE, pulsePower * 255 / 100);
 
   // 리부트 전 래치로 매달려 있던 핀을 전부 당겨 내림 — 물리 상태 동기화
   for (int i = 0; i < NUM_COILS; i++) coilPullPulse(i);
@@ -347,6 +366,12 @@ void loop() {
     case '<': intervalMs = max(250, intervalMs - 250); printStatus(); break;
     case '+': pulseMs += 10; printStatus(); break;
     case '-': pulseMs = max(10, pulseMs - 10); printStatus(); break;
+    case ')': pulsePower = min(100, pulsePower + 5);
+              ledcWrite(CH_PULSE, pulsePower * 255 / 100);
+              printStatus(); break;
+    case '(': pulsePower = max(10, pulsePower - 5);
+              ledcWrite(CH_PULSE, pulsePower * 255 / 100);
+              printStatus(); break;
     case ']': holdDuty = min(255, holdDuty + 10);
               ledcWrite(CH_HOLD, 255 - holdDuty);  // 홀드 중인 전 코일에 즉시 반영
               printStatus(); break;
