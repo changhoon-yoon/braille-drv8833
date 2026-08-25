@@ -134,7 +134,7 @@ def _annotate(cv2, frame, corners, ids, result, cell, pattern):
                 cv2.circle(frame, (cx, cy), 8, (90, 90, 90), 1)
 
 
-def run_camera(no_serial, view=False):
+def run_camera(no_serial, view=False, yellow=False):
     import cv2
     import locator
 
@@ -164,7 +164,8 @@ def run_camera(no_serial, view=False):
             ok, frame = cap.read()
             if not ok:
                 continue
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # 노란 마커: 블루 채널에서 검정으로 보임 (노랑 = 파란빛 흡수)
+            gray = frame[:, :, 0] if yellow else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             result, corners, ids = locator.locate(gray, detail=True)
             now = time.time()
 
@@ -211,11 +212,20 @@ if __name__ == "__main__":
     ap.add_argument("--no-serial", action="store_true")
     ap.add_argument("--view", action="store_true",
                     help="브라우저 라이브 뷰 (http://<파이IP>:8501)")
+    ap.add_argument("--yellow", action="store_true",
+                    help="노란 마커 보드 — 블루 채널로 검출")
+    ap.add_argument("--marker-size", type=float, help="마커 한 변 mm (config 덮어씀)")
+    ap.add_argument("--marker-pitch", type=float, help="마커 간격 mm (config 덮어씀)")
     args = ap.parse_args()
+
+    if args.marker_size:
+        config.MARKER_SIZE_MM = args.marker_size
+    if args.marker_pitch:
+        config.MARKER_PITCH_MM = args.marker_pitch
 
     if args.selftest:
         raise SystemExit(0 if run_selftest() else 1)
     elif args.sim:
         run_sim(args.no_serial)
     else:
-        run_camera(args.no_serial, view=args.view)
+        run_camera(args.no_serial, view=args.view, yellow=args.yellow)
