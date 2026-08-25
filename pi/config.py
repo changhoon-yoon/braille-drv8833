@@ -22,5 +22,7 @@ BAUD        = 115200
 
 # ---------- 카메라 ----------
 CAMERA_INDEX  = 0                 # /dev/video0 (USB 웹캠) — CSI 카메라는 picamera2로 대체 예정
-FRAME_WIDTH   = 640
-FRAME_HEIGHT  = 480
+# 해상도를 올리면 같은 높이에서 마커가 크게 잡혀 물리 크기를 줄일 수 있다.
+# (이 웹캠 최대 1280x800, 720p ArUco 검출 ~29ms로 실시간 여유)
+FRAME_WIDTH   = 1280
+FRAME_HEIGHT  = 720
