@@ -27,15 +27,27 @@ class Streamer:
 
             def do_GET(self):
                 if self.path == "/":
+                    # 서버가 재시작되면 MJPEG은 마지막 프레임에서 멈추므로,
+                    # 3초마다 /ping을 확인해 끊김→복구 시 자동 새로고침한다.
                     body = (b"<html><head><title>braille reader view</title></head>"
                             b"<body style='margin:0;background:#111;display:flex;"
                             b"justify-content:center'><img src='/stream' "
-                            b"style='max-width:100vw;max-height:100vh'></body></html>")
+                            b"style='max-width:100vw;max-height:100vh'>"
+                            b"<script>let down=false;setInterval(async()=>{try{"
+                            b"await fetch('/ping',{cache:'no-store'});"
+                            b"if(down)location.reload();down=false;}"
+                            b"catch(e){down=true;}},3000);</script>"
+                            b"</body></html>")
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html")
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     self.wfile.write(body)
+                elif self.path == "/ping":
+                    self.send_response(200)
+                    self.send_header("Content-Length", "2")
+                    self.end_headers()
+                    self.wfile.write(b"ok")
                 elif self.path == "/stream":
                     self.send_response(200)
                     self.send_header("Content-Type",

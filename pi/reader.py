@@ -148,11 +148,21 @@ def run_camera(no_serial, view=False, yellow=False):
     import cv2
     import locator
 
-    cap = cv2.VideoCapture(config.CAMERA_INDEX)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
-    if not cap.isOpened():
-        raise SystemExit(f"카메라를 열 수 없음 (index {config.CAMERA_INDEX})")
+    # 저전압 등으로 USB가 재연결되면 카메라 번호가 바뀐다(video0→video1)
+    # → 고정 인덱스 대신 열리는 카메라를 스캔해서 사용
+    cap = None
+    for idx in dict.fromkeys([config.CAMERA_INDEX, 0, 1, 2, 3]):
+        c = cv2.VideoCapture(idx)
+        c.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
+        c.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
+        if c.isOpened() and c.read()[0]:
+            print(f"카메라 index {idx} 사용")
+            cap = c
+            break
+        c.release()
+    if cap is None:
+        raise SystemExit("카메라를 열 수 없음 (index 0~3 스캔 실패)")
+    read_fails = 0
 
     streamer = None
     if view:
@@ -173,7 +183,11 @@ def run_camera(no_serial, view=False, yellow=False):
         while True:
             ok, frame = cap.read()
             if not ok:
+                read_fails += 1
+                if read_fails > 100:  # 카메라가 뽑힘 — 종료하면 systemd가 재시작+재스캔
+                    raise SystemExit("카메라 응답 없음 — 재시작으로 재스캔")
                 continue
+            read_fails = 0
             # 노란 마커: 블루 채널에서 검정으로 보임 (노랑 = 파란빛 흡수)
             gray = frame[:, :, 0] if yellow else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             result, corners, ids = locator.locate(gray, detail=True)
