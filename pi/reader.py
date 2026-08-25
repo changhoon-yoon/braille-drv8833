@@ -174,8 +174,10 @@ def run_camera(no_serial, view=False, yellow=False):
     send, close = make_sender(no_serial)
     q = CellQuantizer()
     last_pattern = None
-    last_change = time.time()
-    resynced = False
+    fired_cell = None      # 마지막으로 실제 발사한 셀 — 이 값을 "들고" 있는다
+    pending_cell = None    # 새 셀 후보 (STABLE_FRAMES 연속 유지돼야 발사)
+    pending_n = 0
+    ema = None             # 좌표 지수평활 상태
     lost_since = None
 
     print("카메라 리더 시작 — Ctrl+C로 종료")
@@ -194,20 +196,35 @@ def run_camera(no_serial, view=False, yellow=False):
             now = time.time()
 
             if result is not None:
+                # 오래 끊겼다 돌아오면 평활 상태를 리셋 (다른 위치로 옮겼을 수 있음)
+                if lost_since is not None and now - lost_since > 1.5:
+                    ema = None
                 lost_since = None
                 x_mm, y_mm, n = result
-                if q.update(x_mm, y_mm):
-                    pattern = page.window(q.col, q.row)
-                    if pattern != last_pattern:
-                        print(f"\n[POS] ({x_mm:6.1f},{y_mm:6.1f})mm 마커{n} -> 셀({q.col},{q.row})")
-                        send(pattern, diff=True)
-                        last_pattern = pattern
-                        last_change = now
-                        resynced = False
-                elif not resynced and now - last_change > 2.0 and last_pattern:
-                    send(last_pattern, diff=False)  # 정지 상태: 전체 재동기화 1회
-                    resynced = True
+                # 좌표 지수평활 — 검출 노이즈로 인한 순간 튐 억제
+                a = config.EMA_ALPHA
+                ema = (x_mm, y_mm) if ema is None else \
+                      (ema[0] + a * (x_mm - ema[0]), ema[1] + a * (y_mm - ema[1]))
+                q.update(ema[0], ema[1])
+                cand = (q.col, q.row)
+                # 셀 변경은 STABLE_FRAMES 연속 같은 값일 때만 확정 — 깜빡임은 무시하고
+                # 그동안 마지막 발사값을 그대로 유지한다
+                if cand == fired_cell:
+                    pending_cell, pending_n = None, 0
+                elif cand == pending_cell:
+                    pending_n += 1
+                    if pending_n >= config.STABLE_FRAMES:
+                        pattern = page.window(*cand)
+                        if pattern != last_pattern:
+                            print(f"\n[POS] ({x_mm:6.1f},{y_mm:6.1f})mm 마커{n} -> 셀{cand}")
+                            send(pattern, diff=True)
+                            last_pattern = pattern
+                        fired_cell = cand
+                        pending_cell, pending_n = None, 0
+                else:
+                    pending_cell, pending_n = cand, 1
             else:
+                # 마커 없음 — 아무것도 발사하지 않고 마지막 상태 유지
                 if lost_since is None:
                     lost_since = now
                 elif now - lost_since > 1.0:
