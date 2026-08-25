@@ -66,11 +66,17 @@ if __name__ == "__main__":
     ap.add_argument("--blue", type=int, default=140, help="노랑의 연하기 0~160 (클수록 연함)")
     ap.add_argument("--size", type=float, help="마커 한 변 mm (config 덮어씀)")
     ap.add_argument("--pitch", type=float, help="마커 간격 mm (config 덮어씀)")
+    ap.add_argument("--cols", type=int, help="마커 격자 열 수 (config 덮어씀)")
+    ap.add_argument("--rows", type=int, help="마커 격자 행 수 (config 덮어씀)")
     args = ap.parse_args()
     if args.size:
         config.MARKER_SIZE_MM = args.size
     if args.pitch:
         config.MARKER_PITCH_MM = args.pitch
+    if args.cols:
+        config.GRID_COLS = args.cols
+    if args.rows:
+        config.GRID_ROWS = args.rows
     img = render_board(args.color, args.blue)
     cv2.imwrite(args.out, img)
     w_mm, h_mm = board_size_mm()

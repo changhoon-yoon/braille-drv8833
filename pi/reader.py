@@ -240,12 +240,18 @@ if __name__ == "__main__":
                     help="노란 마커 보드 — 블루 채널로 검출")
     ap.add_argument("--marker-size", type=float, help="마커 한 변 mm (config 덮어씀)")
     ap.add_argument("--marker-pitch", type=float, help="마커 간격 mm (config 덮어씀)")
+    ap.add_argument("--grid-cols", type=int, help="마커 격자 열 수 (보드와 일치 필수)")
+    ap.add_argument("--grid-rows", type=int, help="마커 격자 행 수 (보드와 일치 필수)")
     args = ap.parse_args()
 
     if args.marker_size:
         config.MARKER_SIZE_MM = args.marker_size
     if args.marker_pitch:
         config.MARKER_PITCH_MM = args.marker_pitch
+    if args.grid_cols:
+        config.GRID_COLS = args.grid_cols
+    if args.grid_rows:
+        config.GRID_ROWS = args.grid_rows
 
     if args.selftest:
         raise SystemExit(0 if run_selftest() else 1)
