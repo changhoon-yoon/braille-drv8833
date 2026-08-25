@@ -117,7 +117,17 @@ def _annotate(cv2, frame, corners, ids, result, cell, pattern):
                    cv2.MARKER_CROSS, 24, 2)
     if result:
         x, y, n = result
-        text = f"x={x:6.1f}mm y={y:6.1f}mm  markers={n}  cell=({cell[0]},{cell[1]})"
+        # 실측: 마커 한 변 px → 현재 높이의 시야(mm) 환산 (크기·간격 튜닝 근거)
+        import numpy as np
+        sides = [float(np.linalg.norm(q[0][0] - q[0][1])) for q in corners] if corners else []
+        if sides:
+            side_px = sum(sides) / len(sides)
+            fov_w = w / side_px * config.MARKER_SIZE_MM
+            fov_h = h / side_px * config.MARKER_SIZE_MM
+            text = (f"x={x:6.1f} y={y:6.1f}mm  mk={n}  cell=({cell[0]},{cell[1]})  "
+                    f"side={side_px:.0f}px  FOV={fov_w:.0f}x{fov_h:.0f}mm")
+        else:
+            text = f"x={x:6.1f}mm y={y:6.1f}mm  markers={n}  cell=({cell[0]},{cell[1]})"
         color = (80, 220, 80)
     else:
         text = "NO MARKER - hold steady / adjust height"
