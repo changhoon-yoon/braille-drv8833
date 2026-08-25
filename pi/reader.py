@@ -108,7 +108,33 @@ def run_sim(no_serial):
         close()
 
 
-def run_camera(no_serial):
+def _annotate(cv2, frame, corners, ids, result, cell, pattern):
+    """뷰어용 오버레이 — 마커 테두리, 화면 중심 십자, 좌표/셀 텍스트, 3×3 창 미리보기."""
+    h, w = frame.shape[:2]
+    if ids is not None and len(ids):
+        cv2.aruco.drawDetectedMarkers(frame, corners, ids)
+    cv2.drawMarker(frame, (w // 2, h // 2), (0, 200, 255),
+                   cv2.MARKER_CROSS, 24, 2)
+    if result:
+        x, y, n = result
+        text = f"x={x:6.1f}mm y={y:6.1f}mm  markers={n}  cell=({cell[0]},{cell[1]})"
+        color = (80, 220, 80)
+    else:
+        text = "NO MARKER - hold steady / adjust height"
+        color = (60, 60, 230)
+    cv2.rectangle(frame, (0, 0), (w, 26), (20, 20, 20), -1)
+    cv2.putText(frame, text, (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+    if pattern:  # 오른쪽 아래에 현재 3×3 창 상태
+        for i, ch in enumerate(pattern):
+            cx = w - 62 + (i % 3) * 22
+            cy = h - 62 + (i // 3) * 22
+            if ch == "1":
+                cv2.circle(frame, (cx, cy), 8, (60, 140, 240), -1)
+            else:
+                cv2.circle(frame, (cx, cy), 8, (90, 90, 90), 1)
+
+
+def run_camera(no_serial, view=False):
     import cv2
     import locator
 
@@ -117,6 +143,12 @@ def run_camera(no_serial):
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
     if not cap.isOpened():
         raise SystemExit(f"카메라를 열 수 없음 (index {config.CAMERA_INDEX})")
+
+    streamer = None
+    if view:
+        from viewer import Streamer
+        streamer = Streamer()
+        print(f"라이브 뷰: http://<파이IP>:{streamer.port}/  (브라우저로 접속)")
 
     page = VirtualPage()
     send, close = make_sender(no_serial)
@@ -133,29 +165,36 @@ def run_camera(no_serial):
             if not ok:
                 continue
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            result = locator.locate(gray)
+            result, corners, ids = locator.locate(gray, detail=True)
             now = time.time()
 
-            if result is None:
+            if result is not None:
+                lost_since = None
+                x_mm, y_mm, n = result
+                if q.update(x_mm, y_mm):
+                    pattern = page.window(q.col, q.row)
+                    if pattern != last_pattern:
+                        print(f"\n[POS] ({x_mm:6.1f},{y_mm:6.1f})mm 마커{n} -> 셀({q.col},{q.row})")
+                        send(pattern, diff=True)
+                        last_pattern = pattern
+                        last_change = now
+                        resynced = False
+                elif not resynced and now - last_change > 2.0 and last_pattern:
+                    send(last_pattern, diff=False)  # 정지 상태: 전체 재동기화 1회
+                    resynced = True
+            else:
                 if lost_since is None:
                     lost_since = now
                 elif now - lost_since > 1.0:
                     print("\r[LOST] 마커 없음 — 마지막 위치 유지          ", end="")
-                continue
-            lost_since = None
-            x_mm, y_mm, n = result
 
-            if q.update(x_mm, y_mm):
-                pattern = page.window(q.col, q.row)
-                if pattern != last_pattern:
-                    print(f"\n[POS] ({x_mm:6.1f},{y_mm:6.1f})mm 마커{n} -> 셀({q.col},{q.row})")
-                    send(pattern, diff=True)
-                    last_pattern = pattern
-                    last_change = now
-                    resynced = False
-            elif not resynced and now - last_change > 2.0 and last_pattern:
-                send(last_pattern, diff=False)  # 정지 상태: 전체 재동기화 1회
-                resynced = True
+            if streamer is not None:
+                cell = (q.col, q.row) if q.col is not None else ("-", "-")
+                _annotate(cv2, frame, corners, ids, result, cell, last_pattern)
+                ok2, jpg = cv2.imencode(".jpg", frame,
+                                        [cv2.IMWRITE_JPEG_QUALITY, 70])
+                if ok2:
+                    streamer.publish(jpg.tobytes())
     except KeyboardInterrupt:
         pass
     finally:
@@ -170,6 +209,8 @@ if __name__ == "__main__":
     mode.add_argument("--sim", action="store_true")
     mode.add_argument("--camera", action="store_true")
     ap.add_argument("--no-serial", action="store_true")
+    ap.add_argument("--view", action="store_true",
+                    help="브라우저 라이브 뷰 (http://<파이IP>:8501)")
     args = ap.parse_args()
 
     if args.selftest:
@@ -177,4 +218,4 @@ if __name__ == "__main__":
     elif args.sim:
         run_sim(args.no_serial)
     else:
-        run_camera(args.no_serial)
+        run_camera(args.no_serial, view=args.view)

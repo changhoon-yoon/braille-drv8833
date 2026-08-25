@@ -27,11 +27,14 @@ except AttributeError:  # pragma: no cover
         return cv2.aruco.detectMarkers(gray, DICT, parameters=_params)
 
 
-def locate(gray):
-    """그레이스케일 프레임 → (x_mm, y_mm, 마커 수) 또는 None (마커 0개)."""
+def locate(gray, detail=False):
+    """그레이스케일 프레임 → (x_mm, y_mm, 마커 수) 또는 None (마커 0개).
+
+    detail=True면 (결과, corners, ids)를 돌려줘 뷰어 오버레이에 쓴다.
+    """
     corners, ids, _ = _detect(gray)
     if ids is None or len(ids) == 0:
-        return None
+        return (None, corners, ids) if detail else None
     h, w = gray.shape[:2]
     img_center = np.array([w / 2.0, h / 2.0])
 
@@ -56,7 +59,8 @@ def locate(gray):
         estimates.append((mx + off_x_mm, my + off_y_mm))
 
     if not estimates:
-        return None
+        return (None, corners, ids) if detail else None
     arr = np.array(estimates)
     x, y = arr.mean(axis=0)
-    return float(x), float(y), len(estimates)
+    result = (float(x), float(y), len(estimates))
+    return (result, corners, ids) if detail else result
