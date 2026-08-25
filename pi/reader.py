@@ -1,0 +1,180 @@
+"""무한 캔버스 점자 리더 — 메인 루프.
+
+  python3 reader.py --selftest          # 카메라·시리얼 없이 로케이터 수학 검증
+  python3 reader.py --sim               # 가상 쓸기 경로 → ESP32 전송 (카메라 없이)
+  python3 reader.py --sim --no-serial   # 시리얼도 없이 패턴 출력만
+  python3 reader.py --camera            # 실전: 카메라 → 마커 → 좌표 → 창 → 전송
+
+흐름: 카메라 프레임 → locator(마커→mm) → 셀 양자화(히스테리시스)
+      → virtual_page 3×3 크롭 → D: 디프 전송 (멈추면 B: 재동기화)
+"""
+import argparse
+import time
+
+import config
+from virtual_page import VirtualPage
+
+
+class CellQuantizer:
+    """mm 좌표 → 점자 칸. 칸 경계 떨림 방지용 히스테리시스 포함."""
+
+    def __init__(self):
+        self.col = None
+        self.row = None
+
+    def update(self, x_mm, y_mm):
+        fc = x_mm / config.MM_PER_CELL
+        fr = y_mm / config.MM_PER_CELL
+        if self.col is None:
+            self.col, self.row = round(fc), round(fr)
+            return True
+        moved = False
+        if abs(fc - self.col) > 0.5 + config.HYSTERESIS:
+            self.col = round(fc)
+            moved = True
+        if abs(fr - self.row) > 0.5 + config.HYSTERESIS:
+            self.row = round(fr)
+            moved = True
+        return moved
+
+
+def run_selftest():
+    """보드 이미지를 합성해 여러 위치·회전에서 로케이터 오차를 검증 (하드웨어 불필요)."""
+    import cv2
+    import numpy as np
+    import locator
+    import marker_board
+
+    board = marker_board.render_board()
+    px_per_mm = marker_board.PX_PER_MM
+    w_mm, h_mm = marker_board.board_size_mm()
+    view_w, view_h = 640, 480
+
+    cases = [(40, 40, 0), (90, 130, 0), (150, 220, 0), (65, 95, 12), (120, 180, -18)]
+    failures = 0
+    for tx, ty, angle in cases:
+        # 보드에서 (tx,ty)mm가 화면 중앙에 오는 카메라 뷰를 합성 (0.5x 축소 = 카메라 거리)
+        scale = 0.5
+        m = cv2.getRotationMatrix2D((tx * px_per_mm, ty * px_per_mm), angle, scale)
+        m[0, 2] += view_w / 2 - tx * px_per_mm
+        m[1, 2] += view_h / 2 - ty * px_per_mm
+        view = cv2.warpAffine(board, m, (view_w, view_h), borderValue=255)
+        result = locator.locate(view)
+        if result is None:
+            print(f"  ({tx:3},{ty:3}) rot{angle:+3}° -> 마커 검출 실패  FAIL")
+            failures += 1
+            continue
+        x, y, n = result
+        err = ((x - tx) ** 2 + (y - ty) ** 2) ** 0.5
+        ok = err < 2.0
+        print(f"  ({tx:3},{ty:3}) rot{angle:+3}° -> ({x:6.1f},{y:6.1f}) "
+              f"마커{n}개 오차 {err:.2f}mm  {'OK' if ok else 'FAIL'}")
+        failures += 0 if ok else 1
+    print(f"selftest: {len(cases) - failures}/{len(cases)} 통과 (허용 오차 2mm)")
+    return failures == 0
+
+
+def make_sender(no_serial):
+    if no_serial:
+        def send(pattern, diff=True):
+            print(f"  TX {'D' if diff else 'B'}:{pattern}")
+        return send, lambda: None
+    from braille_link import BrailleLink
+    link = BrailleLink()
+    return link.send, link.close
+
+
+def run_sim(no_serial):
+    """마커/카메라 없이: 가상 좌표가 페이지를 쓸고 다니며 창 패턴을 전송."""
+    page = VirtualPage()
+    send, close = make_sender(no_serial)
+    q = CellQuantizer()
+    last = None
+    # 줄1 쓸기 → 줄2 쓸기 → 하트 가장자리 근처 통과
+    path = [(c, 3) for c in range(2, 19)] + \
+           [(c, 7) for c in range(2, 13)] + \
+           [(c, 10) for c in range(14, 26)]
+    try:
+        for col, row in path:
+            q.update(col * config.MM_PER_CELL, row * config.MM_PER_CELL)
+            pattern = page.window(q.col, q.row)
+            if pattern != last:
+                print(f"[SIM] 창 중심 ({q.col:2},{q.row:2})")
+                send(pattern, diff=True)
+                last = pattern
+            time.sleep(0.25)
+        send("0" * 9, diff=False)  # 종료: 전체 내림 + 재동기화
+    finally:
+        close()
+
+
+def run_camera(no_serial):
+    import cv2
+    import locator
+
+    cap = cv2.VideoCapture(config.CAMERA_INDEX)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
+    if not cap.isOpened():
+        raise SystemExit(f"카메라를 열 수 없음 (index {config.CAMERA_INDEX})")
+
+    page = VirtualPage()
+    send, close = make_sender(no_serial)
+    q = CellQuantizer()
+    last_pattern = None
+    last_change = time.time()
+    resynced = False
+    lost_since = None
+
+    print("카메라 리더 시작 — Ctrl+C로 종료")
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            result = locator.locate(gray)
+            now = time.time()
+
+            if result is None:
+                if lost_since is None:
+                    lost_since = now
+                elif now - lost_since > 1.0:
+                    print("\r[LOST] 마커 없음 — 마지막 위치 유지          ", end="")
+                continue
+            lost_since = None
+            x_mm, y_mm, n = result
+
+            if q.update(x_mm, y_mm):
+                pattern = page.window(q.col, q.row)
+                if pattern != last_pattern:
+                    print(f"\n[POS] ({x_mm:6.1f},{y_mm:6.1f})mm 마커{n} -> 셀({q.col},{q.row})")
+                    send(pattern, diff=True)
+                    last_pattern = pattern
+                    last_change = now
+                    resynced = False
+            elif not resynced and now - last_change > 2.0 and last_pattern:
+                send(last_pattern, diff=False)  # 정지 상태: 전체 재동기화 1회
+                resynced = True
+    except KeyboardInterrupt:
+        pass
+    finally:
+        cap.release()
+        close()
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    mode = ap.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--selftest", action="store_true")
+    mode.add_argument("--sim", action="store_true")
+    mode.add_argument("--camera", action="store_true")
+    ap.add_argument("--no-serial", action="store_true")
+    args = ap.parse_args()
+
+    if args.selftest:
+        raise SystemExit(0 if run_selftest() else 1)
+    elif args.sim:
+        run_sim(args.no_serial)
+    else:
+        run_camera(args.no_serial)

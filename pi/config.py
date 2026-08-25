@@ -1,0 +1,26 @@
+# 무한 캔버스 점자 리더 — 공통 설정
+# 마커 보드(인쇄물)와 로케이터, 리더가 모두 이 값을 공유한다.
+# 인쇄물을 다시 뽑기 전에는 이 값을 바꾸지 말 것 (보드와 코드가 어긋남).
+
+# ---------- ArUco 마커 보드 ----------
+MARKER_DICT     = "DICT_4X4_100"  # 4x4 비트, ID 0~99
+MARKER_SIZE_MM  = 12.0            # 마커 한 변 (인쇄 기준)
+MARKER_PITCH_MM = 36.0            # 마커 중심 간 간격
+GRID_COLS       = 5               # 마커 격자 (ID = row * GRID_COLS + col)
+GRID_ROWS       = 7
+PAGE_DPI        = 300             # 보드 PNG 출력 해상도
+
+# ---------- 가상 페이지 ----------
+# 보드 폭 180mm(5x36)에 페이지 27칸이 들어가도록 6.5mm/칸.
+# 실제 점자 셀 간격(~6mm)과도 비슷해 손 감각이 자연스럽다.
+MM_PER_CELL = 6.5                 # 실제 몇 mm 이동이 점자 한 칸 이동인가
+HYSTERESIS  = 0.30                # 칸 전환 히스테리시스 (칸의 30%를 더 지나야 전환)
+
+# ---------- 시리얼 (ESP32 점자 모듈) ----------
+SERIAL_PORT = "/dev/ttyACM0"
+BAUD        = 115200
+
+# ---------- 카메라 ----------
+CAMERA_INDEX  = 0                 # /dev/video0 (USB 웹캠) — CSI 카메라는 picamera2로 대체 예정
+FRAME_WIDTH   = 640
+FRAME_HEIGHT  = 480

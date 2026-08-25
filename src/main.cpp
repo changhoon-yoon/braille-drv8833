@@ -18,7 +18,9 @@
 //
 // [시리얼 프로토콜 - 115200bps, Pi에서 사용]
 //   B:XXXXXXXXX\n : 9자리 0/1 패턴 적용 (행 우선: 왼위→오른위, ... →오른아래)
+//                   전체 동기화 — 모든 자리를 무조건 발사 (크로스토크 재정렬)
 //                   예) B:110110000\n  응답: [OK] ...
+//   D:XXXXXXXXX\n : 디프 갱신 — 추적 상태와 다른 자리만 발사 (쓸기 모드용, 빠름)
 //   B:000000000\n : 전부 내림
 //
 // [벤치 튜닝 명령 - 사람이 시리얼 모니터에서]
@@ -168,20 +170,22 @@ String patternStr() {
   return s;
 }
 
-// ---- B:XXXXXXXXX 패턴 적용 ----
-// '0' 자리는 반대 극성(당김) 펄스를 무조건 발사, '1' 자리도 무조건 재푸시.
-// up[] 추적에 의존하지 않아 크로스토크·탈조로 어긋난 핀도 매번 물리적으로
-// 패턴과 일치하게 정렬된다. 전부 순차 발사 (동시 통전 금지 — 전원 딥 방지)
-void applyPattern(const char* p) {
+// ---- B:/D: 패턴 적용 ----
+// B(diffOnly=false): 전체 동기화 — '0'은 무조건 당김, '1'은 무조건 푸시.
+//   up[] 추적에 의존하지 않아 크로스토크·탈조로 어긋난 핀도 재정렬된다.
+// D(diffOnly=true): 추적 상태와 다른 자리만 발사 — 창 쓸기처럼 연속 갱신할 때
+//   보통 2~3점만 바뀌므로 갱신이 빨라진다 (가끔 B:로 재동기화 권장).
+// 전부 순차 발사 (동시 통전 금지 — 전원 딥 방지)
+void applyPattern(const char* p, bool diffOnly) {
   bool first = true;
   for (int i = 0; i < NUM_COILS; i++) {
-    if (p[i] == '1') continue;
+    if (p[i] != '0' || (diffOnly && !up[i])) continue;
     if (!first) delay(popGapMs);
     coilRelease(i);
     first = false;
   }
   for (int i = 0; i < NUM_COILS; i++) {
-    if (p[i] == '0') continue;
+    if (p[i] != '1' || (diffOnly && up[i])) continue;
     if (!first) delay(popGapMs);
     coilRaise(i);
     first = false;
@@ -199,11 +203,11 @@ void applyPattern(const char* p) {
 
 void parseLine() {
   lineBuf[lineLen] = '\0';
-  bool ok = (lineLen == 11) && lineBuf[0] == 'B' && lineBuf[1] == ':';
+  bool ok = (lineLen == 11) && (lineBuf[0] == 'B' || lineBuf[0] == 'D') && lineBuf[1] == ':';
   for (int i = 2; ok && i < 11; i++)
     if (lineBuf[i] != '0' && lineBuf[i] != '1') ok = false;
-  if (ok) applyPattern(lineBuf + 2);
-  else    Serial.printf("[ERR] bad pattern '%s' (need B:XXXXXXXXX, 9x 0/1)\n", lineBuf);
+  if (ok) applyPattern(lineBuf + 2, lineBuf[0] == 'D');
+  else    Serial.printf("[ERR] bad pattern '%s' (need B:XXXXXXXXX or D:..., 9x 0/1)\n", lineBuf);
 }
 
 void printStatus() {
@@ -215,7 +219,8 @@ void printStatus() {
 
 void printHelp() {
   Serial.println("---- braille 9-coil ----");
-  Serial.println(" B:XXXXXXXXX(엔터) : 9자리 패턴 적용 (Pi용, 행 우선)");
+  Serial.println(" B:XXXXXXXXX(엔터) : 패턴 전체 동기화 (Pi용, 행 우선)");
+  Serial.println(" D:XXXXXXXXX(엔터) : 바뀐 자리만 발사 (쓸기 모드, 빠름)");
   Serial.println(" 0~8 : 튜닝 대상 코일 선택");
   Serial.println(" u : 선택 코일 올리기   d : 전부 내리기(당김 스윕)+모드 정지");
   Serial.println(" h : 래치/홀드 모드 전환 (기본 래치 - 펄스 후 전원 0)");
@@ -303,7 +308,7 @@ void loop() {
     else { capturing = false; lineLen = 0; Serial.println("[ERR] pattern too long"); }
     return;
   }
-  if (c == 'B') {
+  if (c == 'B' || c == 'D') {
     capturing = true;
     captureAt = millis();
     lineLen = 0;
