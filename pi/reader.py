@@ -75,13 +75,75 @@ def run_selftest():
 
 
 def make_sender(no_serial):
+    """(send, close) 반환. send.poll() 을 주기적으로 불러주면 보드 자동 (재)연결.
+
+    보드가 아직 안 꽂혔거나 중간에 빠져도 리더(카메라·뷰어)는 죽지 않는다:
+    경고 한 줄 남기고 무발사로 계속, RETRY_S 마다 포트를 다시 열어 보고,
+    연결되면 마지막 패턴을 B:(전체 동기화)로 보내 보드 상태를 맞춘다.
+    (예전엔 포트 없으면 예외로 종료 → systemd 가 3초마다 재시작하는 크래시 루프)
+    """
     if no_serial:
         def send(pattern, diff=True):
             print(f"  TX {'D' if diff else 'B'}:{pattern}")
+        send.poll = lambda: None
         return send, lambda: None
+
+    import serial as _serial
     from braille_link import BrailleLink
-    link = BrailleLink()
-    return link.send, link.close
+    RETRY_S = 10
+    st = {"link": None, "next_try": 0.0, "warned": False, "last": None}
+
+    def _connect():
+        try:
+            st["link"] = BrailleLink()
+        except (_serial.SerialException, OSError) as e:
+            st["link"] = None
+            if not st["warned"]:
+                print(f"[SERIAL] {config.SERIAL_PORT} 없음 — 보드 꽂히면 자동 연결 "
+                      f"({RETRY_S}초마다 재시도, 그동안 무발사): {e}", flush=True)
+                st["warned"] = True
+            st["next_try"] = time.time() + RETRY_S
+            return False
+        st["warned"] = False
+        print(f"[SERIAL] {config.SERIAL_PORT} 연결됨 — 보드 준비", flush=True)
+        if st["last"] is not None:                 # 끊긴 동안의 상태를 전체 동기화
+            _tx(st["last"], diff=False)
+        return True
+
+    def _drop(e):
+        print(f"[SERIAL] 끊김 ({e}) — 재연결 대기", flush=True)
+        try:
+            st["link"].close()
+        except Exception:
+            pass
+        st["link"] = None
+        st["next_try"] = time.time() + 3
+
+    def _tx(pattern, diff):
+        try:
+            return st["link"].send(pattern, diff)
+        except (_serial.SerialException, OSError) as e:
+            _drop(e)
+            return None
+
+    def poll():
+        if st["link"] is None and time.time() >= st["next_try"]:
+            _connect()
+
+    def send(pattern, diff=True):
+        st["last"] = pattern
+        poll()
+        if st["link"] is None:
+            return None
+        return _tx(pattern, diff)
+
+    def close():
+        if st["link"] is not None:
+            st["link"].close()
+
+    send.poll = poll
+    _connect()
+    return send, close
 
 
 def run_sim(no_serial):
@@ -190,6 +252,7 @@ def run_camera(no_serial, view=False, yellow=False):
                     raise SystemExit("카메라 응답 없음 — 재시작으로 재스캔")
                 continue
             read_fails = 0
+            send.poll()   # 보드가 나중에 꽂혀도 여기서 자동 연결
             # 노란 마커: 블루 채널에서 검정으로 보임 (노랑 = 파란빛 흡수)
             gray = frame[:, :, 0] if yellow else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             result, corners, ids = locator.locate(gray, detail=True)
