@@ -29,8 +29,10 @@
 //   h : 래치/홀드 모드 전환 (기본: 래치 — 펄스 후 전원 0으로 매달림 유지)
 //   p : 밀기 펄스만    q : 당기기 펄스    o : 100% 연속 ON (전류계용, 발열!)
 //   t : 자동 반복 펄스  r : 켜고-끄고 교대 (60초 자동정지)
-//   a : 전 코일 스윕 (0→8 순차 PUSH → 대기 → 0→8 순차 PULL)
+//   a_h : 전 코일 순차 올리기 (0→8 PUSH, 올린 채 유지)   a_l : 전 코일 순차 내리기
+//   a_r : 왕복 스윕 (a_h → interval 대기 → a_l)   ※ 3글자 이어서 입력, a 만 치면 안내
 //   + / - : 펄스폭 ±10ms    [ / ] : 홀드 듀티 ∓10    < / > : 반복간격 ∓250ms
+//   , / . : 순차 발사 간격 ∓10ms (popGapMs — 동시 발사는 전원 한계로 금지)
 //   s : 상태  ? : 도움말
 // ============================================================
 
@@ -59,11 +61,14 @@ const int PWM_RES  = 8;     // 듀티 0~255
 int  pulseMs  = 20;   // 팝 펄스 폭 (래치 최소 통전 탐색 — 길면 반동으로 되튈 수 있어 짧게, +/-로 조정)
 int  pulsePower = 70; // 펄스 구동 세기 % (100=풀토크, (/)로 ∓5 조정 — 래치 실패하면 올릴 것)
 int  holdDuty = 70;   // 홀드 실효 듀티 70/255 ≈ 27%
-int  popGapMs = 60;   // 순차 팝 사이 간격 (동시 발사 금지 — 전원 딥 방지)
+int  popGapMs = 20;   // 순차 팝 사이 간격 ms (,/.로 ∓10). 동시 발사 금지 — 코일당 ~0.8A라 9개면 ~8A로
+                      // 벤치 서플라이(1.2A)·건전지 모두 붕괴. 20ms면 서플라이 회복 충분, 딥 보이면 60으로
 bool latchMode = true; // true: 펄스 래치(유지전류 0, 20ms 검증됨) / false: 팝→홀드 PWM
 
 bool up[NUM_COILS] = {false};  // 각 코일 올라감 상태
 int  sel = 0;                  // 벤치 명령 대상 코일
+int           aState = 0;      // a 접두 파서: 0=없음, 1='a' 받음, 2='a_' 받음
+unsigned long aAt    = 0;
 
 // ---------- 자동 반복 테스트 (t 키) ----------
 bool          autoTest     = false;
@@ -217,6 +222,22 @@ void printStatus() {
                 popGapMs, intervalMs, autoTest ? "ON" : "OFF", altMode ? "ON" : "OFF");
 }
 
+// ---- a_h / a_l: 전 코일 순차 올리기/내리기 (up[] 무시하고 무조건 발사) ----
+// 동시 발사 금지: 코일당 ~0.8A → 9개 동시면 ~8A. 벤치 서플라이(1.2A)는 CC로 떨어져
+// 전부 래치 실패, 건전지는 내부저항으로 전압 붕괴. 순차 + popGapMs 간격이 유일한 안전한 길.
+void sweepAll(bool raise) {
+  autoTest = false; altMode = false;
+  Serial.printf("[SWEEP] 0→8 순차 %s (펄스 %dms, 간격 %dms)\n", raise ? "PUSH" : "PULL", pulseMs, popGapMs);
+  for (int i = 0; i < NUM_COILS; i++) {
+    if (raise) coilPushPulse(i); else coilPullPulse(i);
+    Serial.printf("[SWEEP] coil %d %s\n", i, raise ? "PUSH" : "PULL");
+    if (i < NUM_COILS - 1) delay(popGapMs);
+  }
+  printStatus();
+}
+
+const char* A_HINT = "[a] a_h=전부 올리기  a_l=전부 내리기  a_r=왕복 스윕 (3글자 이어서 입력)";
+
 void printHelp() {
   Serial.println("---- braille 9-coil ----");
   Serial.println(" B:XXXXXXXXX(엔터) : 패턴 전체 동기화 (Pi용, 행 우선)");
@@ -226,8 +247,8 @@ void printHelp() {
   Serial.println(" h : 래치/홀드 모드 전환 (기본 래치 - 펄스 후 전원 0)");
   Serial.println(" p : 밀기 펄스만   q : 당기기 펄스   o : 100% 연속 ON (발열주의)");
   Serial.println(" t : 자동 반복 펄스   r : 켜고-끄고 교대 (60초 자동정지)");
-  Serial.println(" a : 전 코일 스윕 (0→8 PUSH → 대기 → 전부 PULL)");
-  Serial.println(" +/- : 펄스폭   (/) : 펄스파워 ∓5%   [/] : 홀드듀티   </> : 반복간격");
+  Serial.println(" a_h : 전 코일 순차 올리기(유지)   a_l : 전 코일 순차 내리기   a_r : 왕복 스윕");
+  Serial.println(" +/- : 펄스폭   (/) : 펄스파워 ∓5%   [/] : 홀드듀티   </> : 반복간격   ,/. : 발사간격 ∓10ms");
   Serial.println(" s : 상태   ? : 도움말");
 }
 
@@ -298,8 +319,36 @@ void loop() {
     Serial.println("[ERR] pattern timeout");
   }
 
+  // ---- a 접두 타임아웃: a 만 치고 멈추면 안내 후 리셋 ----
+  if (aState && millis() - aAt > 2000) {
+    aState = 0;
+    Serial.println(A_HINT);
+  }
+
   if (!Serial.available()) return;
   char c = Serial.read();
+
+  // ---- a_h / a_l / a_r 접두 처리 ('a' 다음 두 글자) ----
+  if (aState == 1) {
+    if (c == '_') { aState = 2; aAt = millis(); return; }
+    if (c == 'a') { aAt = millis(); return; }      // 연타는 다시 대기
+    aState = 0;
+    Serial.println(A_HINT);
+    if (c == '\n' || c == '\r') return;            // 엔터면 안내만, 다른 글자는 아래서 정상 처리
+  } else if (aState == 2) {
+    aState = 0;
+    switch (c) {
+      case 'h': sweepAll(true);  return;
+      case 'l': sweepAll(false); return;
+      case 'r': sweepAll(true);
+                Serial.printf("[SWEEP] %dms 무전원 래치 관찰 후 전부 내림...\n", intervalMs);
+                delay(intervalMs);
+                sweepAll(false);
+                Serial.println("[SWEEP] 완료 - 안 올라간/안 내려간 셀 번호를 기록할 것");
+                return;
+      default:  Serial.printf("[ERR] a_%c ? - a_h / a_l / a_r 중 하나\n", c); return;
+    }
+  }
 
   // ---- B로 시작하는 줄은 개행까지 모아서 패턴 파싱 ----
   if (capturing) {
@@ -383,26 +432,9 @@ void loop() {
     case '[': holdDuty = max(0, holdDuty - 10);
               ledcWrite(CH_HOLD, 255 - holdDuty);
               printStatus(); break;
-    case 'a': {  // 전 코일 스윕: 순차 PUSH → 무전원 래치 관찰 → 순차 PULL
-      autoTest = false; altMode = false;
-      Serial.printf("[SWEEP] 0→8 순차 PUSH (펄스 %dms, 간격 %dms)\n", pulseMs, popGapMs);
-      for (int i = 0; i < NUM_COILS; i++) {
-        coilPushPulse(i);
-        Serial.printf("[SWEEP] coil %d PUSH\n", i);
-        if (i < NUM_COILS - 1) delay(popGapMs);
-      }
-      printStatus();
-      Serial.printf("[SWEEP] %dms 무전원 래치 관찰 후 전부 내림...\n", intervalMs);
-      delay(intervalMs);
-      for (int i = 0; i < NUM_COILS; i++) {
-        coilPullPulse(i);
-        Serial.printf("[SWEEP] coil %d PULL\n", i);
-        if (i < NUM_COILS - 1) delay(popGapMs);
-      }
-      printStatus();
-      Serial.println("[SWEEP] 완료 - 안 올라간/안 내려간 셀 번호를 기록할 것");
-      break;
-    }
+    case '.': popGapMs += 10; printStatus(); break;
+    case ',': popGapMs = max(0, popGapMs - 10); printStatus(); break;
+    case 'a': aState = 1; aAt = millis(); break;  // a_h / a_l / a_r — 위 접두 처리에서 완성
     case 'h': latchMode = !latchMode;
               Serial.printf("[MODE] %s\n", latchMode ? "LATCH - 펄스 후 전원 0 유지" : "HOLD - 팝 후 PWM 유지");
               break;
