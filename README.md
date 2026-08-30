@@ -167,6 +167,27 @@ B:000000000\n     전부 내림
 | `h` | 래치/홀드 모드 전환 (기본 래치 = 유지전류 0) |
 | `s` / `?` | 상태 / 도움말 |
 
+## 6. 라즈베리파이 연동 (무한 캔버스 리더)
+
+파이 4가 카메라로 ArUco 마커를 읽어 절대좌표를 구하고, 가상 페이지의 3×3 창을
+`D:XXXXXXXXX` 패턴으로 이 보드에 보낸다. 코드는 `pi/` 폴더, 파이 쪽 경로는 `~/braille/`.
+
+| 역할 | 파일 |
+|---|---|
+| 카메라 → 좌표 → 패턴 전송 (메인 루프) | `pi/reader.py` (`--camera --view --yellow ...`) |
+| 보드와 시리얼 (부팅 대기 → `t`로 자동테스트 정지 → `D:`/`B:` 전송) | `pi/braille_link.py` |
+| 마커 보드 생성 / 좌표 계산 / 가상 페이지 / 라이브 뷰어 | `marker_board.py` `locator.py` `virtual_page.py` `viewer.py` |
+| 상시 실행 서비스 | `braille-reader.service` (systemd, 죽으면 3초 뒤 재시작) — 뷰어 `http://<파이IP>:8501` |
+
+파이 준비: `sudo apt install python3-opencv python3-serial esptool`, 보드는 파이 USB → `/dev/ttyACM0`.
+
+**보드 펌웨어를 파이에서 굽기** — PC에서 `pio run` 후 한 줄:
+```bash
+bash pi/deploy_fw.sh                        # .local 안 풀리면: bash pi/deploy_fw.sh chyoon_pi4b8g@<파이IP>
+```
+서비스 정지 → 산출물 4개 복사 → `esptool --no-stub`(데비안 패키지엔 S3 스텁이 없음) → 서비스 재시작까지 자동.
+수동으로 파이에서: `bash ~/braille/flash_fw.sh`.
+
 ## 개발 워크플로우
 
 펌웨어 개발은 [Claude Code](https://claude.com/claude-code)를 활용한 바이브 코딩으로 진행했다
