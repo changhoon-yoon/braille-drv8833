@@ -29,7 +29,8 @@
 //   h : 래치/홀드 모드 전환 (기본: 래치 — 펄스 후 전원 0으로 매달림 유지)
 //   p : 밀기 펄스만    q : 당기기 펄스    o : 100% 연속 ON (전류계용, 발열!)
 //   t : 자동 반복 펄스  r : 켜고-끄고 교대 (60초 자동정지)
-//   a_h : 전 코일 순차 올리기 (0→8 PUSH, 올린 채 유지)   a_l : 전 코일 순차 내리기
+//   a_h : 전 코일 순차 올리기 (PUSH, 올린 채 유지)   a_l : 전 코일 순차 내리기
+//         순차 발사 순서는 항상 0,1,2,3,5,6,7,8,4 — 중앙 4번 마지막 (FIRE_ORDER)
 //   a_r : 왕복 스윕 (a_h → interval 대기 → a_l)   ※ 3글자 이어서 입력, a 만 치면 안내
 //   + / - : 펄스폭 ±10ms    [ / ] : 홀드 듀티 ∓10    < / > : 반복간격 ∓250ms
 //   , / . : 순차 발사 간격 ∓10ms (popGapMs — 동시 발사는 전원 한계로 금지)
@@ -49,6 +50,12 @@ const int COILS[NUM_COILS][2] = {
   {10, 11}, {13, 12}, {15, 14},   // 코일4, 5 반전
   {17, 16}, {18, 21}, {38, 39},   // 코일6 반전
 };
+
+// ---------- 순차 발사 순서 ----------
+// 중앙(4)은 이웃 8개의 자기장 영향을 전부 받으므로 항상 마지막에 발사한다 —
+// 이웃이 먼저 자리 잡은 뒤 4번을 처리해야 크로스토크로 되튀거나 덜 올라가는 일이 준다.
+// 스윕(a_h/a_l/a_r), 패턴 적용(B:/D:), 전체 내림(d), 부팅 동기화 모두 이 순서를 따름.
+const int FIRE_ORDER[NUM_COILS] = {0, 1, 2, 3, 5, 6, 7, 8, 4};
 
 // ---------- LEDC: 홀드 전용 채널 1개를 전 코일이 공유 ----------
 // S3는 LEDC 채널이 8개뿐이라 코일당 1채널은 불가능.
@@ -162,7 +169,10 @@ void coilRelease(int i) {
 }
 
 void allOff() {
-  for (int i = 0; i < NUM_COILS; i++) coilRelease(i);
+  for (int k = 0; k < NUM_COILS; k++) {   // FIRE_ORDER: 중앙 4번 마지막, 순차 간격 유지
+    if (k) delay(popGapMs);
+    coilRelease(FIRE_ORDER[k]);
+  }
 }
 
 int countUp() {
@@ -185,13 +195,15 @@ String patternStr() {
 // 전부 순차 발사 (동시 통전 금지 — 전원 딥 방지)
 void applyPattern(const char* p, bool diffOnly) {
   bool first = true;
-  for (int i = 0; i < NUM_COILS; i++) {
+  for (int k = 0; k < NUM_COILS; k++) {   // FIRE_ORDER: 중앙 4번 마지막
+    int i = FIRE_ORDER[k];
     if (p[i] != '0' || (diffOnly && !up[i])) continue;
     if (!first) delay(popGapMs);
     coilRelease(i);
     first = false;
   }
-  for (int i = 0; i < NUM_COILS; i++) {
+  for (int k = 0; k < NUM_COILS; k++) {
+    int i = FIRE_ORDER[k];
     if (p[i] != '1' || (diffOnly && up[i])) continue;
     if (!first) delay(popGapMs);
     coilRaise(i);
@@ -229,11 +241,12 @@ void printStatus() {
 // 전부 래치 실패, 건전지는 내부저항으로 전압 붕괴. 순차 + popGapMs 간격이 유일한 안전한 길.
 void sweepAll(bool raise) {
   autoTest = false; altMode = false;
-  Serial.printf("[SWEEP] 0→8 순차 %s (펄스 %dms, 간격 %dms)\n", raise ? "PUSH" : "PULL", pulseMs, popGapMs);
-  for (int i = 0; i < NUM_COILS; i++) {
+  Serial.printf("[SWEEP] 순차 %s (0,1,2,3,5,6,7,8,4 - 중앙 마지막) (펄스 %dms, 간격 %dms)\n", raise ? "PUSH" : "PULL", pulseMs, popGapMs);
+  for (int k = 0; k < NUM_COILS; k++) {   // FIRE_ORDER: 중앙 4번 마지막
+    int i = FIRE_ORDER[k];
     if (raise) coilPushPulse(i); else coilPullPulse(i);
     Serial.printf("[SWEEP] coil %d %s\n", i, raise ? "PUSH" : "PULL");
-    if (i < NUM_COILS - 1) delay(popGapMs);
+    if (k < NUM_COILS - 1) delay(popGapMs);
   }
   printStatus();
 }
@@ -267,8 +280,11 @@ void setup() {
   ledcSetup(CH_PULSE, PWM_FREQ, PWM_RES);
   ledcWrite(CH_PULSE, pulsePower * 255 / 100);
 
-  // 리부트 전 래치로 매달려 있던 핀을 전부 당겨 내림 — 물리 상태 동기화
-  for (int i = 0; i < NUM_COILS; i++) coilPullPulse(i);
+  // 리부트 전 래치로 매달려 있던 핀을 전부 당겨 내림 — 물리 상태 동기화 (FIRE_ORDER, 순차)
+  for (int k = 0; k < NUM_COILS; k++) {
+    if (k) delay(popGapMs);
+    coilPullPulse(FIRE_ORDER[k]);
+  }
 
   Serial.begin(115200);
   delay(500);
